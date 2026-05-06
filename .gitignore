@@ -1,0 +1,83 @@
+# ========================
+# Python
+# ========================
+__pycache__/
+*.py[cod]
+*.so
+
+# Virtual environment
+venv/
+.env/
+.venv/
+
+# ========================
+# Jupyter Notebook
+# ========================
+.ipynb_checkpoints/
+
+# ========================
+# Logs
+# ========================
+*.log
+logs/
+
+# ========================
+# OS files
+# ========================
+.DS_Store
+Thumbs.db
+
+# ========================
+# IDE
+# ========================
+.vscode/
+.idea/
+
+# ========================
+# Model weights & datasets
+# ========================
+*.pt
+*.pth
+*.onnx
+*.engine
+*.tflite
+
+datasets/
+data/
+runs/
+outputs/
+results/
+models/
+
+# ========================
+# Images / videos (tuỳ chọn)
+# ========================
+*.jpg
+*.png
+*.mp4
+*.avi
+
+# ========================
+# Cache
+# ========================
+.cache/
+*.cache
+
+# ========================
+# Environment variables
+# ========================
+.env
+.env.*
+
+# ========================
+# Build / dist
+# ========================
+build/
+dist/
+*.egg-info/
+
+# ========================
+# Temporary files
+# ========================
+*.tmp
+*.temp

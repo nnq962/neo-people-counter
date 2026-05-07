@@ -1,8 +1,11 @@
+from typing import Optional, List
 from ultralytics import YOLO
 from pathlib import Path
 import time
-import cv2
-from utils import LOGGER
+import numpy as np
+import aidcv as cv2
+from utils import LOGGER, restore_level_names
+from src.zone import Zone
 
 class Detector:
     """YOLO-based object detector (supports person, head)."""
@@ -25,9 +28,12 @@ class Detector:
         model_path: str,
         conf: float = 0.5,
         imgsz: int = 640,
-        device: str = "cuda",
+        device: str = "cpu",
         half: bool = True,
-        show: bool = False
+        show: bool = False,
+        show_scale: float = 1.0,
+        zone: Optional[Zone] = None,
+        vid_stride: int = 1
     ):
 
         self.source = source
@@ -37,6 +43,9 @@ class Detector:
         self.device = device
         self.half = half
         self.show = show
+        self.show_scale = show_scale
+        self.zone = zone
+        self.vid_stride = vid_stride
 
         # Log info
         LOGGER.info(f"Source: {self.source}")
@@ -46,6 +55,8 @@ class Detector:
         LOGGER.info(f"Device: {self.device}")
         LOGGER.info(f"Half: {self.half}")
         LOGGER.info(f"Show: {self.show}")
+        LOGGER.info(f"Show scale: {self.show_scale}")
+        LOGGER.info(f"Zone configured: {self.zone is not None}")
 
         # Detect mode from model path
         path_parts = Path(self.model_path).parts
@@ -91,22 +102,27 @@ class Detector:
             show=False,
             stream=True,
             verbose=False,
-            classes=target_classes
+            classes=target_classes,
+            vid_stride=self.vid_stride
         )
 
         return results
 
-    def _draw_overlay(self, frame, boxes, fps, count):
-        """Vẽ bounding box, FPS và đếm số lượng"""
+    def _draw_overlay(self, frame, in_zone_boxes, out_zone_boxes, fps, count):
+        """Vẽ bounding box, FPS và đếm số lượng.
+        
+        in_zone_boxes  : boxes nằm trong zone → vẽ màu đỏ
+        out_zone_boxes : boxes nằm ngoài zone → vẽ màu xanh
+        """
 
         # ── Bảng màu ────────────────────────────────────────────────
-        COLOR_BOX      = (255, 180, 50)  # Xanh dương nhạt, sáng
-        COLOR_LABEL_BG = (255, 180, 50)
+        COLOR_IN_ZONE  = (50,  50,  220) # Đỏ  (BGR) — trong zone
+        COLOR_OUT_ZONE = (255, 180,  50) # Xanh nhạt (BGR) — ngoài zone
         COLOR_LABEL_FG = (255, 255, 255) # Chữ label trắng
-        COLOR_HUD_BG   = (15, 15, 15)
+        COLOR_HUD_BG   = (15,  15,  15)
         COLOR_KEY      = (200, 200, 200) # Key trắng nhạt
         COLOR_VAL_FPS  = (255, 255, 255) # FPS trắng
-        COLOR_VAL_CNT  = (255, 180, 50)  # Count cùng màu bbox
+        COLOR_VAL_CNT  = (50,  50,  220) # Count cùng màu in-zone
         # ────────────────────────────────────────────────────────────
 
         frame_h, frame_w = frame.shape[:2]
@@ -115,32 +131,41 @@ class Detector:
         overlay = frame.copy()
 
         # ── 1. Bounding Boxes ────────────────────────────────────────
-        for box in boxes:
-            x1, y1, x2, y2 = map(int, box.xyxy[0])
-            conf = float(box.conf[0])
+        def _draw_boxes(boxes, color):
+            for box in boxes:
+                coords_np = box.xyxy[0].cpu().numpy()
 
-            # Bo góc kiểu bracket
-            corner_len = max(12, (x2 - x1) // 6)
-            for (sx, sy, dx, dy) in [
-                (x1, y1, x1 + corner_len, y1), (x1, y1, x1, y1 + corner_len),
-                (x2, y1, x2 - corner_len, y1), (x2, y1, x2, y1 + corner_len),
-                (x1, y2, x1 + corner_len, y2), (x1, y2, x1, y2 - corner_len),
-                (x2, y2, x2 - corner_len, y2), (x2, y2, x2, y2 - corner_len),
-            ]:
-                cv2.line(overlay, (sx, sy), (dx, dy), COLOR_BOX, 2)
+                if not np.all(np.isfinite(coords_np)):
+                    continue
 
-            # Label pill
-            label = f"{self.detect_mode}  {conf:.2f}"
-            font, font_scale, font_thick = cv2.FONT_HERSHEY_SIMPLEX, 0.45, 1
-            (lw, lh), _ = cv2.getTextSize(label, font, font_scale, font_thick)
-            pad = 4
-            lx1, ly1 = x1, max(y1 - lh - pad * 2, 0)
-            lx2, ly2 = x1 + lw + pad * 2, ly1 + lh + pad * 2
+                x1, y1, x2, y2 = map(int, coords_np)
+                conf = float(box.conf[0].cpu().numpy())
 
-            # ✅ Vẽ nền label lên overlay
-            cv2.rectangle(overlay, (lx1, ly1), (lx2, ly2), COLOR_LABEL_BG, -1)
-            cv2.putText(overlay, label, (lx1 + pad, ly2 - pad),
-                        font, font_scale, COLOR_LABEL_FG, font_thick, cv2.LINE_AA)
+                # Bo góc kiểu bracket
+                corner_len = max(12, (x2 - x1) // 6)
+                for (sx, sy, dx, dy) in [
+                    (x1, y1, x1 + corner_len, y1), (x1, y1, x1, y1 + corner_len),
+                    (x2, y1, x2 - corner_len, y1), (x2, y1, x2, y1 + corner_len),
+                    (x1, y2, x1 + corner_len, y2), (x1, y2, x1, y2 - corner_len),
+                    (x2, y2, x2 - corner_len, y2), (x2, y2, x2, y2 - corner_len),
+                ]:
+                    cv2.line(overlay, (sx, sy), (dx, dy), color, 2)
+
+                # Label pill
+                label = f"{self.detect_mode}  {conf:.2f}"
+                font, font_scale, font_thick = cv2.FONT_HERSHEY_SIMPLEX, 0.45, 1
+                (lw, lh), _ = cv2.getTextSize(label, font, font_scale, font_thick)
+                pad = 4
+                lx1, ly1 = x1, max(y1 - lh - pad * 2, 0)
+                lx2, ly2 = x1 + lw + pad * 2, ly1 + lh + pad * 2
+
+                cv2.rectangle(overlay, (lx1, ly1), (lx2, ly2), color, -1)
+                cv2.putText(overlay, label, (lx1 + pad, ly2 - pad),
+                            font, font_scale, COLOR_LABEL_FG, font_thick, cv2.LINE_AA)
+
+        # Vẽ out-zone trước (nằm dưới) → in-zone vẽ sau (nằm trên)
+        _draw_boxes(out_zone_boxes, COLOR_OUT_ZONE)
+        _draw_boxes(in_zone_boxes,  COLOR_IN_ZONE)
 
         # ── 2. HUD Panel ─────────────────────────────────────────────
         rows = [
@@ -165,7 +190,7 @@ class Detector:
 
         # ✅ Vẽ panel lên overlay
         cv2.rectangle(overlay, (px1, py1), (px2, py2), COLOR_HUD_BG, -1)
-        cv2.rectangle(overlay, (px1, py1), (px2, py2), COLOR_BOX, 1)
+        cv2.rectangle(overlay, (px1, py1), (px2, py2), COLOR_IN_ZONE, 1)
 
         for i, (key, val, color_val) in enumerate(rows):
             row_y = py1 + pad_y + (i + 1) * row_h - 8
@@ -180,6 +205,110 @@ class Detector:
 
         return frame
 
+    def _draw_zones(self, frame):
+        """Draw zone on frame: nền bán trong suốt + viền đậm + tên zone."""
+        if not self.zone:
+            return frame
+
+        pts = self.zone.points.reshape((-1, 1, 2))
+
+        # ── Nền bán trong suốt ──────────────────────────────────
+        overlay = frame.copy()
+        cv2.fillPoly(overlay, [pts], color=(0, 255, 0))
+        cv2.addWeighted(overlay, 0.15, frame, 0.85, 0, frame)
+
+        # ── Viền đậm ────────────────────────────────────────────
+        cv2.polylines(frame, [pts], isClosed=True, color=(0, 255, 0), thickness=2)
+
+        # ── Tên zone: đặt tại centroid của polygon ───────────────
+        cx = int(self.zone.points[:, 0].mean())
+        cy = int(self.zone.points[:, 1].mean())
+
+        label = self.zone.name
+        font = cv2.FONT_HERSHEY_SIMPLEX
+        font_scale = 0.7
+        font_thick = 2
+        (lw, lh), _ = cv2.getTextSize(label, font, font_scale, font_thick)
+
+        # Nền chữ
+        pad = 6
+        cv2.rectangle(
+            frame,
+            (cx - lw // 2 - pad, cy - lh - pad),
+            (cx + lw // 2 + pad, cy + pad),
+            (0, 255, 0),
+            -1
+        )
+        # Chữ
+        cv2.putText(
+            frame, label,
+            (cx - lw // 2, cy),
+            font, font_scale,
+            (255, 255, 255),  # chữ trắng trên nền xanh
+            font_thick,
+            cv2.LINE_AA
+        )
+
+        return frame
+
+    def _is_bbox_in_zone(
+        self,
+        bbox: tuple,
+        points: np.ndarray,
+        # mode: str = "center",
+    ) -> bool:
+
+        # if mode not in ("center", "bottom_center"):
+        #     raise ValueError(
+        #         f"mode phải là 'center' hoặc 'bottom_center', nhận được: '{mode}'"
+        #     )
+
+        x1, y1, x2, y2 = bbox[:4]
+
+        # Bỏ qua bbox có tọa độ NaN/Inf — coi như nằm ngoài zone
+        if not np.all(np.isfinite([x1, y1, x2, y2])):
+            return False
+
+        point = (int((x1 + x2) / 2), int((y1 + y2) / 2))
+
+        # if mode == "center":
+        #     # Điểm trung tâm của bounding box
+        #     point = (int((x1 + x2) / 2), int((y1 + y2) / 2))
+        # else:  # bottom_center
+        #     # Điểm giữa cạnh dưới bbox
+        #     point = (int((x1 + x2) / 2), int(y2))
+
+        # cv2.pointPolygonTest trả về:
+        #   > 0  : điểm nằm trong đa giác
+        #   = 0  : điểm nằm trên cạnh đa giác
+        #   < 0  : điểm nằm ngoài đa giác
+        result = cv2.pointPolygonTest(points, point, measureDist=False)
+        return result >= 0
+
+    def _classify_boxes(self, boxes):
+        """Phân loại boxes theo zone.
+
+        Returns:
+            in_zone_boxes  : list box có center nằm trong zone
+            out_zone_boxes : list box không nằm trong zone
+            count          : số lượng box trong zone
+        """
+        if not self.zone:
+            return list(boxes), [], len(list(boxes))
+
+        in_zone_boxes  = []
+        out_zone_boxes = []
+
+        for box in boxes:
+            coords = box.xyxy[0].cpu().numpy()
+            in_zone = self._is_bbox_in_zone(coords, self.zone.points)
+            if in_zone:
+                in_zone_boxes.append(box)
+            else:
+                out_zone_boxes.append(box)
+
+        return in_zone_boxes, out_zone_boxes, len(in_zone_boxes)
+
     def stop(self):
         """Stop the detector"""
         self.is_running = False
@@ -188,47 +317,62 @@ class Detector:
     def run(self):
         """Run the detection loop."""
         LOGGER.info("Starting detection loop...")
+
+        # Window name
+        win_name = f"People Counter"
+        if self.show:
+            cv2.namedWindow(win_name, cv2.WINDOW_NORMAL)
+
         try:
             results = self._inference()
-            
-            # Khởi tạo biến đếm thời gian cho FPS
             prev_time = time.time()
-            smoothed_fps = 0.0
-            
+            # Restore logger level names
+            _restored = False
+
             for result in results:
                 if not self.is_running:
                     break
-                
-                # Tính FPS thực tế (bao gồm cả thời gian vẽ và render)
+
+                # Restore logger level names
+                if not _restored:
+                    restore_level_names()
+                    _restored = True
+
+                # Calculate FPS
                 current_time = time.time()
                 dt = current_time - prev_time
-                instant_fps = 1 / dt if dt > 0 else 0
+                fps = 1 / dt if dt > 0 else 0
                 prev_time = current_time
 
-                if smoothed_fps == 0.0:
-                    smoothed_fps = instant_fps
-                else:
-                    smoothed_fps = 0.9 * smoothed_fps + 0.1 * instant_fps
-                
+                # Phân loại boxes
+                in_zone_boxes, out_zone_boxes, count = self._classify_boxes(result.boxes)
+
                 if self.show:
-                    # Lấy khung hình gốc chưa có gì từ YOLO
+                    # Copy original frame
                     frame = result.orig_img.copy()
-                    
-                    # Đếm số lượng object (Vì model đã filter qua classes nên len(result.boxes) chính là tổng số cần đếm)
-                    count = len(result.boxes)
-                    
-                    # Gọi hàm vẽ custom
-                    annotated_frame = self._draw_overlay(frame, result.boxes, smoothed_fps, count)
-                    
-                    cv2.imshow(f"Detection - {self.detect_mode}", annotated_frame)
-                    
-                    if cv2.waitKey(1) & 0xFF == ord('q'):
-                        self.stop() # Giả định bạn có định nghĩa def stop(self): self.is_running = False
-                        break
+                    # Draw zones
+                    annotated_frame = self._draw_zones(frame)
+                    # Draw overlay: đỏ=trong zone, xanh=ngoài zone
+                    annotated_frame = self._draw_overlay(annotated_frame, in_zone_boxes, out_zone_boxes, fps, count)
+
+                    # Resize and add padding if needed
+                    if self.show_scale != 1.0:
+                        h, w = annotated_frame.shape[:2]
+                        new_dim = (int(w * self.show_scale), int(h * self.show_scale))
+                        resized_frame = cv2.resize(annotated_frame, new_dim)
+                        padded_frame = cv2.copyMakeBorder(
+                            resized_frame,
+                            20, 20, 20, 20,
+                            cv2.BORDER_CONSTANT,
+                            value=(255, 255, 255)
+                        )
+                        cv2.imshow(win_name, padded_frame)
+                    else:
+                        cv2.imshow(win_name, annotated_frame)
+
+        except KeyboardInterrupt:
+            LOGGER.info("Keyboard interrupt received.")
         except Exception as e:
             LOGGER.error(f"Error during detection run: {e}")
         finally:
-            if self.show:
-                cv2.destroyAllWindows()
-                cv2.waitKey(1)
             LOGGER.info("Detection loop ended.")

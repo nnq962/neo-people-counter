@@ -1,13 +1,25 @@
-model:
-  path: models/yolov8n.pt
-  confidence: 0.5
-  device: cpu          # cpu | cuda | mps
+source: "rtsp://admin:phenikaaneo%40@192.168.0.150:554/Streaming/Channels/101"
+model_path: "models/head/yolo8n_rknn_model"
 
-video:
-  source: 0            # 0 = webcam, hoặc đường dẫn file video
-  width: 1280
-  height: 720
+detector:
+  conf: 0.70
+  imgsz: 640
+  half: true
+  show: true
+  show_scale: 0.55
+  vid_stride: 1
 
-counter:
-  mode: line           # line | zone
-  line_position: 0.5   # 0.0 - 1.0 (tỉ lệ chiều cao frame)
+uart:
+  port: /dev/ttyS4
+  baudrate: 115200
+
+zone:
+  name: "Cabin 1"
+  points:
+    - [63, 576]
+    - [1517, 614]
+    - [1500, 1066]
+    - [24, 1065]
+  meta:
+    max_capacity: 10
+    alert_threshold: 8

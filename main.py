@@ -1,16 +1,15 @@
 from src.detector import Detector
-
-MODEL_PATH = "models/person/yolo26m.pt"
-SOURCE = "data/test1.mp4"
+from utils import load_config, load_zone
 
 if __name__ == "__main__":
+    cfg = load_config()
+    zone = load_zone(cfg)
+
     detector = Detector(
-        source=SOURCE,
-        model_path=MODEL_PATH,
-        conf=0.65,
-        imgsz=640,
-        device="cuda",
-        show=True
+        source=cfg["source"],
+        model_path=cfg["model_path"],
+        zone=zone,
+        **cfg["detector"]
     )
 
     detector.run()

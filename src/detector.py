@@ -355,6 +355,20 @@ class Detector:
         self.is_running = False
         LOGGER.info("Cleanup complete.")
 
+    def update_detector_params(self, verbose: bool):
+        """
+        Update detector parameters.
+        """
+        self.verbose = verbose
+        LOGGER.info("Detector params updated")
+
+    def update_zone(self, zone: Optional[Zone]):
+        """
+        Update the detection zone.
+        """
+        self.zone = zone
+        LOGGER.info("Detector zone updated")
+
     def stop(self):
         self.is_running = False
         LOGGER.info("Detector stopped")

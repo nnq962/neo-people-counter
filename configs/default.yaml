@@ -4,7 +4,7 @@ detector:
   model_path: models/head/yolo8n_rknn_model
   conf: 0.7
   vid_stride: 1
-  verbose: false
+  verbose: true
 uart:
   port: /dev/ttyS4
   baudrate: 115200

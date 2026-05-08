@@ -20,6 +20,30 @@ def get_status() -> dict:
     }
 
 
+def update_zone(zone_cfg: dict) -> None:
+    """Cập nhật riêng cấu hình Zone."""
+    global _detector
+    if not _detector or not zone_cfg:
+        return
+    try:
+        new_zone = Zone.from_dict(zone_cfg)
+        _detector.update_zone(new_zone)
+    except Exception as e:
+        LOGGER.warning(f"Lỗi khi cập nhật nóng Zone: {e}")
+
+
+def update_dynamic_params(cfg: dict) -> None:
+    """Cập nhật các tham số có thể thay đổi nóng (hot-reload) mà không cần restart detector."""
+    global _detector
+    if not _detector:
+        return
+
+    # Update các cờ logic trong detector (ví dụ: verbose)
+    detector_cfg = cfg.get("detector", {})
+    if "verbose" in detector_cfg:
+        _detector.update_detector_params(verbose=detector_cfg["verbose"])
+
+
 def start() -> dict:
     global _detector, _thread
 

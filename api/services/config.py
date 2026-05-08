@@ -36,3 +36,12 @@ def save_config_data(config_dict: dict) -> None:
 
     with open(CONFIG_PATH, "w", encoding="utf-8") as f:
         yaml.dump(config_dict, f, default_flow_style=False, allow_unicode=True, sort_keys=False)
+
+    # Bắn tín hiệu hot-reload sang detector sau khi lưu file
+    try:
+        from api.services import detector as detector_service
+        detector_service.update_dynamic_params(config_dict)
+        detector_service.update_zone(config_dict.get("zone"))
+    except Exception as e:
+        import logging
+        logging.warning(f"Could not trigger hot-reload: {e}")

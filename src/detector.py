@@ -46,7 +46,7 @@ class Detector:
         # Log info
         LOGGER.info(f"Source: {self.source}")
         LOGGER.info(f"Model path: {self.model_path}")
-        LOGGER.info(f"conf: {self.conf}")
+        LOGGER.info(f"Conf: {self.conf}")
         LOGGER.info(f"Show: {self.show}")
         LOGGER.info(f"Show scale: {self.show_scale}")
         LOGGER.info(f"Zone configured: {self.zone}")
@@ -196,7 +196,7 @@ class Detector:
 
         return frame
 
-    def _draw_zones(self, frame):
+    def _draw_zone(self, frame):
         """Draw zone on frame: nền bán trong suốt + viền đậm + tên zone."""
         if not self.zone:
             return frame
@@ -414,7 +414,7 @@ class Detector:
                         # Copy original frame
                         frame = result.orig_img.copy()
                         # Draw zones
-                        annotated_frame = self._draw_zones(frame)
+                        annotated_frame = self._draw_zone(frame)
                         # Draw overlay: đỏ=trong zone, xanh=ngoài zone
                         annotated_frame = self._draw_overlay(annotated_frame, in_zone_boxes, out_zone_boxes, fps)
 

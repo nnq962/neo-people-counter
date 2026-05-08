@@ -1,5 +1,5 @@
 from fastapi import APIRouter, HTTPException
-from api.schemas.detector import DetectorStatus
+from api.models.detector import DetectorStatus
 from api.services import detector as detector_service
 
 router = APIRouter()

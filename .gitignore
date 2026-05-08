@@ -48,6 +48,7 @@ runs/
 outputs/
 results/
 models/
+weights/
 
 # ========================
 # Images / videos (tuỳ chọn)

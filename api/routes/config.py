@@ -1,5 +1,5 @@
 from fastapi import APIRouter, HTTPException
-from api.schemas.config import AppConfig
+from api.models.config import AppConfig
 from api.services import config as config_service
 
 router = APIRouter()

@@ -1,15 +1,9 @@
-from src.detector import Detector
-from utils import load_config, load_zone
+import uvicorn
 
 if __name__ == "__main__":
-    cfg = load_config()
-    zone = load_zone(cfg)
-
-    detector = Detector(
-        source=cfg["source"],
-        model_path=cfg["model_path"],
-        zone=zone,
-        **cfg["detector"]
+    uvicorn.run(
+        "api.server:app", 
+        host="0.0.0.0", 
+        port=9620,
+        reload=False
     )
-
-    detector.run()

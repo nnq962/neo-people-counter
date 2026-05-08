@@ -27,36 +27,31 @@ class Detector:
         source: str,
         model_path: str,
         conf: float = 0.5,
-        imgsz: int = 640,
-        device: str = "cpu",
-        half: bool = True,
         show: bool = False,
         show_scale: float = 1.0,
         zone: Optional[Zone] = None,
-        vid_stride: int = 1
+        vid_stride: int = 1,
+        verbose: bool = True,
     ):
 
         self.source = source
         self.model_path = model_path
         self.conf = conf
-        self.imgsz = imgsz
-        self.device = device
-        self.half = half
         self.show = show
         self.show_scale = show_scale
         self.zone = zone
         self.vid_stride = vid_stride
+        self.verbose = verbose
 
         # Log info
         LOGGER.info(f"Source: {self.source}")
         LOGGER.info(f"Model path: {self.model_path}")
         LOGGER.info(f"conf: {self.conf}")
-        LOGGER.info(f"Image size: {self.imgsz}")
-        LOGGER.info(f"Device: {self.device}")
-        LOGGER.info(f"Half: {self.half}")
         LOGGER.info(f"Show: {self.show}")
         LOGGER.info(f"Show scale: {self.show_scale}")
-        LOGGER.info(f"Zone configured: {self.zone is not None}")
+        LOGGER.info(f"Zone configured: {self.zone}")
+        LOGGER.info(f"Video stride: {self.vid_stride}")
+        LOGGER.info(f"Verbose: {self.verbose}")
 
         # Detect mode from model path
         path_parts = Path(self.model_path).parts
@@ -73,6 +68,7 @@ class Detector:
             LOGGER.info(f"Detect mode: {self.detect_mode}")
 
         self.is_running = True
+        self._results_gen = None
 
         # Load model
         self.model = self._load_model()
@@ -93,12 +89,9 @@ class Detector:
     def _inference(self):
         target_classes = self.CLASS_MAP.get(self.detect_mode)
 
-        results = self.model.predict(
+        self._results_gen = self.model.predict(
             source=self.source,
             conf=self.conf,
-            imgsz=self.imgsz,
-            device=self.device,
-            half=self.half,
             show=False,
             stream=True,
             verbose=False,
@@ -106,9 +99,7 @@ class Detector:
             vid_stride=self.vid_stride
         )
 
-        return results
-
-    def _draw_overlay(self, frame, in_zone_boxes, out_zone_boxes, fps, count):
+    def _draw_overlay(self, frame, in_zone_boxes, out_zone_boxes, fps):
         """Vẽ bounding box, FPS và đếm số lượng.
         
         in_zone_boxes  : boxes nằm trong zone → vẽ màu đỏ
@@ -170,7 +161,7 @@ class Detector:
         # ── 2. HUD Panel ─────────────────────────────────────────────
         rows = [
             ("FPS",                       str(int(fps)),  COLOR_VAL_FPS),
-            (f"Total {self.detect_mode}", str(count),     COLOR_VAL_CNT),
+            (f"Total {self.detect_mode}", str(len(in_zone_boxes)), COLOR_VAL_CNT),
         ]
         font_key  = cv2.FONT_HERSHEY_SIMPLEX
         scale_key, scale_val   = 0.55, 0.9
@@ -291,10 +282,9 @@ class Detector:
         Returns:
             in_zone_boxes  : list box có center nằm trong zone
             out_zone_boxes : list box không nằm trong zone
-            count          : số lượng box trong zone
         """
         if not self.zone:
-            return list(boxes), [], len(list(boxes))
+            return list(boxes), []
 
         in_zone_boxes  = []
         out_zone_boxes = []
@@ -307,72 +297,132 @@ class Detector:
             else:
                 out_zone_boxes.append(box)
 
-        return in_zone_boxes, out_zone_boxes, len(in_zone_boxes)
+        return in_zone_boxes, out_zone_boxes
+
+    def _cleanup(self):
+        """Gọi từ finally của run() — đúng thread sở hữu generator và RKNN."""
+
+        # 1. Đóng generator
+        if self._results_gen is not None:
+            try:
+                self._results_gen.close()
+                LOGGER.info("Inference generator closed.")
+            except Exception:
+                pass
+            self._results_gen = None
+
+        # 2. Đóng LoadStreams (nguyên nhân chính giữ CPU với RTSP)
+        if hasattr(self, "model") and self.model is not None:
+            predictor = getattr(self.model, "predictor", None)
+            if predictor is not None:
+                dataset = getattr(predictor, "dataset", None)
+                if dataset is not None:
+                    try:
+                        if hasattr(dataset, "running"):
+                            dataset.running = False
+                        if hasattr(dataset, "threads"):
+                            for t in dataset.threads:
+                                if t.is_alive():
+                                    t.join(timeout=3)
+                        if hasattr(dataset, "caps"):
+                            for cap in dataset.caps:
+                                if cap and cap.isOpened():
+                                    cap.release()
+                        if hasattr(dataset, "close"):
+                            dataset.close()
+                        LOGGER.info("LoadStreams dataset closed.")
+                    except Exception as e:
+                        LOGGER.warning(f"Error closing dataset: {e}")
+
+                # Reset predictor để lần start sau tạo mới hoàn toàn
+                try:
+                    self.model.predictor = None
+                    LOGGER.info("Predictor reset.")
+                except Exception:
+                    pass
+
+        # 3. Đóng GUI
+        if self.show:
+            try:
+                cv2.destroyAllWindows()
+            except Exception:
+                pass
+
+        # 4. GC
+        import gc
+        gc.collect()
+
+        self.is_running = False
+        LOGGER.info("Cleanup complete.")
 
     def stop(self):
-        """Stop the detector"""
         self.is_running = False
         LOGGER.info("Detector stopped")
 
     def run(self):
         """Run the detection loop."""
         LOGGER.info("Starting detection loop...")
-
-        # Window name
-        win_name = f"People Counter"
-        if self.show:
-            cv2.namedWindow(win_name, cv2.WINDOW_NORMAL)
-
         try:
-            results = self._inference()
+            self._inference()
             prev_time = time.time()
             # Restore logger level names
             _restored = False
 
-            for result in results:
-                if not self.is_running:
-                    break
+            if self._results_gen is not None:
+                for result in self._results_gen:
+                    if not self.is_running:
+                        break
 
-                # Restore logger level names
-                if not _restored:
-                    restore_level_names()
-                    _restored = True
+                    # Restore logger level names
+                    if not _restored:
+                        restore_level_names()
+                        _restored = True
 
-                # Calculate FPS
-                current_time = time.time()
-                dt = current_time - prev_time
-                fps = 1 / dt if dt > 0 else 0
-                prev_time = current_time
+                    # Calculate FPS
+                    current_time = time.time()
+                    dt = current_time - prev_time
+                    fps = 1 / dt if dt > 0 else 0
+                    prev_time = current_time
 
-                # Phân loại boxes
-                in_zone_boxes, out_zone_boxes, count = self._classify_boxes(result.boxes)
+                    # Phân loại boxes
+                    in_zone_boxes, out_zone_boxes = self._classify_boxes(result.boxes)
 
-                if self.show:
-                    # Copy original frame
-                    frame = result.orig_img.copy()
-                    # Draw zones
-                    annotated_frame = self._draw_zones(frame)
-                    # Draw overlay: đỏ=trong zone, xanh=ngoài zone
-                    annotated_frame = self._draw_overlay(annotated_frame, in_zone_boxes, out_zone_boxes, fps, count)
-
-                    # Resize and add padding if needed
-                    if self.show_scale != 1.0:
-                        h, w = annotated_frame.shape[:2]
-                        new_dim = (int(w * self.show_scale), int(h * self.show_scale))
-                        resized_frame = cv2.resize(annotated_frame, new_dim)
-                        padded_frame = cv2.copyMakeBorder(
-                            resized_frame,
-                            20, 20, 20, 20,
-                            cv2.BORDER_CONSTANT,
-                            value=(255, 255, 255)
+                    # Log verbose
+                    if self.verbose:
+                        LOGGER.info(
+                            f"Total: {len(result.boxes):02d} | "
+                            f"In Zone: {len(in_zone_boxes):02d} | "
+                            f"Out Zone: {len(out_zone_boxes):02d} | "
+                            f"FPS: {fps:.2f}"
                         )
-                        cv2.imshow(win_name, padded_frame)
-                    else:
-                        cv2.imshow(win_name, annotated_frame)
+
+                    if self.show:
+                        # Copy original frame
+                        frame = result.orig_img.copy()
+                        # Draw zones
+                        annotated_frame = self._draw_zones(frame)
+                        # Draw overlay: đỏ=trong zone, xanh=ngoài zone
+                        annotated_frame = self._draw_overlay(annotated_frame, in_zone_boxes, out_zone_boxes, fps)
+
+                        # Resize and add padding if needed
+                        if self.show_scale != 1.0:
+                            h, w = annotated_frame.shape[:2]
+                            new_dim = (int(w * self.show_scale), int(h * self.show_scale))
+                            resized_frame = cv2.resize(annotated_frame, new_dim)
+                            padded_frame = cv2.copyMakeBorder(
+                                resized_frame,
+                                20, 20, 20, 20,
+                                cv2.BORDER_CONSTANT,
+                                value=(255, 255, 255)
+                            )
+                            cv2.imshow("", padded_frame)
+                        else:
+                            cv2.imshow("", annotated_frame)
 
         except KeyboardInterrupt:
             LOGGER.info("Keyboard interrupt received.")
         except Exception as e:
             LOGGER.error(f"Error during detection run: {e}")
         finally:
+            self._cleanup()
             LOGGER.info("Detection loop ended.")

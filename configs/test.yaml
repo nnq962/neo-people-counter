@@ -1,10 +1,12 @@
-auto_start: false
+auto_start: true
 detector:
   source: rtsp://admin:phenikaaneo%40@192.168.0.150:554/Streaming/Channels/101
   model_path: models/head/yolo8n_rknn_model
   conf: 0.7
+  show: true
+  show_scale: 0.55
   vid_stride: 1
-  verbose: false
+  verbose: true
 uart:
   port: /dev/ttyS4
   baudrate: 115200
